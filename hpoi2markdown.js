@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hpoi to Markdown with Picsur & Wiki.js (v3.5 Manufacturer Title)
+// @name         Hpoi to Markdown with Picsur & Wiki.js (v3.7 Publish Fix)
 // @namespace    http://tampermonkey.net/
-// @version      3.5
-// @description  提取 Hpoi 手办信息上传图床，自动拼接厂商名到标题，支持多模式发布。
+// @version      3.7
+// @description  提取 Hpoi 手办信息上传图床，自动拼接厂商名，修复覆盖更新后的发布状态。
 // @author       Gemini User
 // @match        https://www.hpoi.net/hobby/*
 // @grant        GM_xmlhttpRequest
@@ -26,7 +26,7 @@
         apiKey: GM_getValue('api_key', ''),
         wikiUrl: GM_getValue('wiki_url', ''),
         wikiToken: GM_getValue('wiki_token', ''),
-        wikiPath: GM_getValue('wiki_path', 'hobby'), // 默认路径前缀
+        wikiPath: GM_getValue('wiki_path', 'hobby'),
     };
 
     const STYLES = `
@@ -90,7 +90,7 @@
             gap: 5px;
             pointer-events: none;
         }
-        
+
         .log-item {
             pointer-events: auto;
             padding: 8px 12px;
@@ -109,11 +109,11 @@
         .log-item.success { border-left-color: #2ecc71; }
         .log-item.error { border-left-color: #e74c3c; }
         .log-item.info { border-left-color: #35CDFF; }
+        .log-item.warning { border-left-color: #f39c12; }
         .log-item.fading { opacity: 0; transform: translateX(20px); }
 
         @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
-        /* 设置弹窗 */
         #hpoi-settings-modal {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -222,7 +222,7 @@
 
             document.getElementById('btn-settings').onclick = () => { modal.style.display = 'flex'; };
             document.getElementById('btn-cancel').onclick = () => { modal.style.display = 'none'; };
-            
+
             document.getElementById('btn-gen').onclick = () => Core.start('gen');
             document.getElementById('btn-pub').onclick = () => Core.start('pub');
             document.getElementById('btn-all').onclick = () => Core.start('all');
@@ -260,7 +260,7 @@
                     const key = document.getElementById('conf-key').value.trim();
                     const res = await Core.uploadToPiscurDirect(blob, 'test.gif', url, key);
                     UI.log(`图床正常: ${res}`, 'success');
-                } catch (e) { UI.log(`图床错误: ${e}`, 'error'); } 
+                } catch (e) { UI.log(`图床错误: ${e}`, 'error'); }
                 finally { btn.textContent = orig; btn.disabled = false; }
             };
 
@@ -302,8 +302,8 @@
                 UI.log('请先配置图床信息！', 'error'); return;
             }
 
-            UI.log(`开始任务 (模式: ${mode === 'gen' ? '仅生成' : mode === 'pub' ? '仅发布' : '生成&发布'})`, 'info');
-            
+            UI.log(`开始任务 (模式: ${mode})`, 'info');
+
             try {
                 const { info: data, images: imagesToProcess } = Core.extractData();
                 UI.log(`已识别: ${data.name}`, 'info');
@@ -328,7 +328,7 @@
                     if (CONFIG.wikiUrl && CONFIG.wikiToken) {
                         UI.log('正在发布到 Wiki.js ...', 'info');
                         await Core.publishToWiki(data, markdown);
-                        UI.log('Wiki 发布成功！', 'success');
+                        UI.log('Wiki 发布(或更新) 成功！', 'success');
                     } else {
                         UI.log('Wiki 配置为空，无法发布。', 'error');
                     }
@@ -343,8 +343,8 @@
         extractData: () => {
             const info = {};
             const imagesToProcess = [];
-            
-            info.url = window.location.href; 
+
+            info.url = window.location.href;
             const urlParts = info.url.split('/');
             info.id = urlParts[urlParts.length - 1].split('?')[0] || 'unknown';
 
@@ -404,10 +404,7 @@
                 }
             });
 
-            // [新增] 拼接厂商名到标题
-            if (info['制作']) {
-                info.name = `${info['制作']} ${info.name}`;
-            }
+            if (info['制作']) info.name = `${info['制作']} ${info.name}`;
 
             return { info, images: imagesToProcess };
         },
@@ -419,7 +416,7 @@
                 if (blob.type === 'image/png') ext = 'png';
                 else if (blob.type === 'image/gif') ext = 'gif';
                 else if (blob.type === 'image/webp') ext = 'webp';
-                
+
                 const prefix = imgObj.type === 'icon' ? 'icon_' : 'hpoi_';
                 const filename = `${prefix}${Date.now()}_${Math.random().toString(36).substr(2, 5)}.${ext}`;
                 const uploadedUrl = await Core.uploadToPiscurDirect(blob, filename, CONFIG.piscurUrl, CONFIG.apiKey);
@@ -476,14 +473,14 @@
             };
 
             const cover = uploadedImages.find(i => i.type === 'cover');
-            
+
             let md = `## ${data.name}\n\n`;
-            
+
             if (cover && !cover.error) md += `![封面](${cover.newUrl})\n\n`;
             else if (data.coverImg) md += `![封面](${data.coverImg})\n\n`;
 
             md += `| 项目 | 内容 |\n| :--- | :--- |\n`;
-            
+
             const keys = ['名称', '属性', '定价', '出货日', '比例', '制作', '系列', '角色', '作品', '官网链接', '外部链接'];
             keys.forEach(key => {
                 if (data[key]) {
@@ -505,7 +502,7 @@
                     md += `| ${k} | ${v} |\n`;
                 }
             }
-            
+
             md += `\n[${data.url}](${data.url})\n\n`;
 
             md += `### 官方图片\n\n`;
@@ -536,61 +533,104 @@
             });
         },
 
-        publishToWiki: (data, content) => {
-            return new Promise((resolve, reject) => {
-                const tags = ['手办']; 
-                if (data['制作']) tags.push(data['制作']);
-                if (data['作品']) tags.push(data['作品']);
-                if (data['角色']) tags.push(data['角色']);
-                const cleanTags = [...new Set(tags)].map(t => t.replace(/[、,，\s]/g, '')).filter(t => t);
+        // === Wiki.js 发布/更新逻辑 ===
+        publishToWiki: async (data, content) => {
+            const tags = ['手办'];
+            if (data['制作']) tags.push(data['制作']);
+            if (data['作品']) tags.push(data['作品']);
+            if (data['角色']) tags.push(data['角色']);
+            const cleanTags = [...new Set(tags)].map(t => t.replace(/[、,，\s]/g, '')).filter(t => t);
 
-                const path = `${CONFIG.wikiPath}/${data.id}`;
+            const path = `${CONFIG.wikiPath}/${data.id}`;
+            const locale = "zh";
 
-                const mutation = `
+            // 1. 尝试创建
+            try {
+                const res = await Core.gqlRequest(`
                     mutation ($content: String!, $description: String!, $editor: String!, $isPrivate: Boolean!, $isPublished: Boolean!, $locale: String!, $path: String!, $tags: [String]!, $title: String!) {
                         pages {
                             create (content: $content, description: $description, editor: $editor, isPrivate: $isPrivate, isPublished: $isPublished, locale: $locale, path: $path, tags: $tags, title: $title) {
-                                responseResult {
-                                    succeeded
-                                    errorCode
-                                    message
-                                }
+                                responseResult { succeeded message }
                             }
                         }
                     }
-                `;
-
-                const variables = {
+                `, {
                     content: content,
                     description: `Hpoi ID: ${data.id} - ${data.name}`,
                     editor: "markdown",
                     isPrivate: false,
                     isPublished: true,
-                    locale: "zh",
+                    locale: locale,
                     path: path,
                     tags: cleanTags,
                     title: data.name
-                };
+                });
 
+                if (res.data?.pages?.create?.responseResult?.succeeded) return true;
+
+                const errMsg = res.data?.pages?.create?.responseResult?.message || res.errors?.[0]?.message || "";
+                if (errMsg.includes("exists") || errMsg.includes("duplicate")) {
+                    UI.log("页面已存在，准备覆盖更新...", "warning");
+                } else {
+                    throw new Error("创建失败: " + errMsg);
+                }
+
+            } catch (e) {
+                if (!e.message.includes("exists") && !e.message.includes("duplicate")) throw e;
+            }
+
+            // 2. 更新逻辑 (查ID -> Update)
+            const queryRes = await Core.gqlRequest(`
+                query ($path: String!, $locale: String!) {
+                    pages {
+                        singleByPath(path: $path, locale: $locale) { id }
+                    }
+                }
+            `, { path: path, locale: locale });
+
+            const pageId = queryRes.data?.pages?.singleByPath?.id;
+            if (!pageId) throw new Error("无法获取现有页面 ID，更新失败");
+
+            // [FIX] Update 时显式指定 isPublished: true 和 isPrivate: false
+            const updateRes = await Core.gqlRequest(`
+                mutation ($id: Int!, $content: String!, $description: String!, $tags: [String]!, $title: String!, $isPublished: Boolean!, $isPrivate: Boolean!) {
+                    pages {
+                        update (id: $id, content: $content, description: $description, tags: $tags, title: $title, isPublished: $isPublished, isPrivate: $isPrivate) {
+                            responseResult { succeeded message }
+                        }
+                    }
+                }
+            `, {
+                id: parseInt(pageId),
+                content: content,
+                description: `Hpoi ID: ${data.id} - ${data.name}`,
+                tags: cleanTags,
+                title: data.name,
+                isPublished: true,
+                isPrivate: false
+            });
+
+            if (updateRes.data?.pages?.update?.responseResult?.succeeded) return true;
+            throw new Error("更新失败: " + updateRes.data?.pages?.update?.responseResult?.message);
+        },
+
+        gqlRequest: (query, variables) => {
+            return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: "POST",
                     url: `${CONFIG.wikiUrl}/graphql`,
                     headers: { "Authorization": `Bearer ${CONFIG.wikiToken}`, "Content-Type": "application/json" },
-                    data: JSON.stringify({ query: mutation, variables }),
+                    data: JSON.stringify({ query, variables }),
                     onload: (res) => {
                         try {
                             const json = JSON.parse(res.responseText);
-                            if (json.errors) {
-                                reject('Wiki API Error: ' + json.errors[0].message);
-                            } else if (json.data && json.data.pages && json.data.pages.create.responseResult.succeeded) {
-                                resolve(true);
-                            } else {
-                                const msg = json.data?.pages?.create?.responseResult?.message || '未知错误 (可能是页面已存在)';
-                                reject('发布失败: ' + msg);
+                            if (json.errors && !JSON.stringify(json.errors).includes("exists")) {
+                                // 允许 exists 错误传递给外层逻辑
                             }
-                        } catch (e) { reject('Wiki Response Parse Error'); }
+                            resolve(json);
+                        } catch (e) { reject('Wiki JSON Error'); }
                     },
-                    onerror: () => reject('Wiki Publish Network Error')
+                    onerror: () => reject('Wiki Net Error')
                 });
             });
         }
