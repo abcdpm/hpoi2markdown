@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hpoi to Markdown with Picsur & Wiki.js (v4.0 Split Tags)
+// @name         Hpoi to Markdown with Picsur & Wiki.js (v4.1 No SVG)
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  提取 Hpoi 手办信息上传图床，自动拆分多厂商/角色标签，优化表格分隔符，支持覆盖更新。
+// @version      4.1
+// @description  提取 Hpoi 手办信息上传图床，自动过滤视频图标，拆分标签，支持Wiki发布。
 // @author       Gemini User
 // @match        https://www.hpoi.net/hobby/*
 // @grant        GM_xmlhttpRequest
@@ -358,25 +358,29 @@
                     const label = labelSpan.textContent.trim();
                     let value = '';
 
-                    // 需要列表处理的字段
-                    const listFields = ['制作', '发行', '原画', '角色', '作品', '属性'];
-
-                    if (listFields.includes(label)) {
-                        // 1. 尝试抓取所有链接文本
-                        let items = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
-
-                        // 2. 如果没有链接，尝试纯文本分割
-                        if (items.length === 0) {
-                            // 替换常见分隔符为统一的分隔符，然后分割
-                            items = p.textContent.replace(/[、,，&/]+/g, ' ').split(/\s+/).filter(t => t);
+                    if (label === '属性') {
+                        const attrs = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
+                        value = attrs.length > 0 ? attrs.join('、') : p.textContent.replace(/\s+/g, ' ').trim();
+                    }
+                    else if (label === '制作') {
+                        // 制作厂商：标题用空格，表格用顿号
+                        const makers = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
+                        if (makers.length > 0) {
+                            value = makers.join('、'); // 表格内容
+                            info._titlePrefix = makers.join(' '); // 标题前缀
+                        } else {
+                            const cleanText = p.textContent.replace(/[、,，]+/g, ' ').replace(/\s+/g, ' ').trim();
+                            value = cleanText.replace(/\s+/g, '、');
+                            info._titlePrefix = cleanText;
                         }
-
-                        // 3. 表格内容统一用顿号连接
-                        value = items.join('、');
-
-                        // [特殊] 制作厂商：标题前缀需要用空格连接
-                        if (label === '制作') {
-                            info._titlePrefix = items.join(' ');
+                    }
+                    else if (['发行', '原画', '角色', '作品'].includes(label)) {
+                        // 其他列表字段：统一用顿号
+                        const items = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
+                        if (items.length > 0) {
+                            value = items.join('、');
+                        } else {
+                            value = p.textContent.replace(/[、,，\s]+/g, '、').replace(/^、|、$/g, '');
                         }
                     }
                     else if (label === '外部链接' || label === '官网链接') {
@@ -415,15 +419,20 @@
             document.querySelectorAll('.swiper-gallery .swiper-slide img').forEach(img => {
                 let src = img.src || img.getAttribute('data-src');
                 if (src) {
+                    // [FIX] 过滤 SVG 和 视频图标
+                    if (src.includes('.svg') || src.includes('icon_play')) return;
+
                     src = src.split('?')[0].replace('/pic/s/', '/pic/n/');
                     info.gallery.push(src);
                     imagesToProcess.push({ type: 'gallery', url: src });
                 }
             });
 
-            // 拼接标题：使用空格连接的厂商名
             if (info._titlePrefix) {
                 info.name = `${info._titlePrefix} ${info.name}`;
+            } else if (info['制作']) {
+                // Fallback
+                info.name = `${info['制作'].replace(/、/g, ' ')} ${info.name}`;
             }
 
             return { info, images: imagesToProcess };
@@ -573,7 +582,7 @@
             splitAndAdd('作品');
             splitAndAdd('角色');
 
-            const cleanTags = [...new Set(tags)].filter(t => t); // 去重
+            const cleanTags = [...new Set(tags)].filter(t => t);
 
             const path = `${CONFIG.wikiPath}/${data.id}`;
             const locale = "zh";
