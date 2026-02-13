@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hpoi to Markdown with Picsur (v2.6 WebP Force)
+// @name         Hpoi to Markdown with Picsur & Wiki.js (v3.5 Manufacturer Title)
 // @namespace    http://tampermonkey.net/
-// @version      2.6
-// @description  提取 Hpoi 手办信息上传至 Picsur (强制WebP后缀/修复Icon/500错误)，单线程稳定版。
+// @version      3.5
+// @description  提取 Hpoi 手办信息上传图床，自动拼接厂商名到标题，支持多模式发布。
 // @author       Gemini User
 // @match        https://www.hpoi.net/hobby/*
 // @grant        GM_xmlhttpRequest
@@ -24,6 +24,9 @@
     const CONFIG = {
         piscurUrl: GM_getValue('piscur_url', ''),
         apiKey: GM_getValue('api_key', ''),
+        wikiUrl: GM_getValue('wiki_url', ''),
+        wikiToken: GM_getValue('wiki_token', ''),
+        wikiPath: GM_getValue('wiki_path', 'hobby'), // 默认路径前缀
     };
 
     const STYLES = `
@@ -31,6 +34,7 @@
             --primary-color: #35CDFF;
             --bg-glass: rgba(0, 0, 0, 0.85);
             --text-color: #fff;
+            --input-bg: #f9f9f9;
         }
 
         #hpoi-md-controls {
@@ -49,27 +53,30 @@
             align-items: center;
             justify-content: center;
             padding: 0 20px;
-            height: 48px;
-            border-radius: 24px;
+            height: 40px;
+            border-radius: 20px;
             background: var(--bg-glass);
             color: var(--text-color);
             border: 1px solid rgba(255,255,255,0.2);
             backdrop-filter: blur(10px);
             cursor: pointer;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: bold;
             transition: all 0.3s ease;
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             text-decoration: none;
             width: auto;
-            min-width: 100px;
+            min-width: 120px;
         }
-        .hpoi-btn-pill i { margin-right: 8px; font-size: 18px; font-style: normal; }
+        .hpoi-btn-pill i { margin-right: 8px; font-size: 16px; font-style: normal; }
         .hpoi-btn-pill:hover {
             background: var(--primary-color);
             border-color: var(--primary-color);
             transform: translateX(-5px);
         }
+        #btn-gen:hover { background: #f39c12; border-color: #f39c12; }
+        #btn-pub:hover { background: #2ecc71; border-color: #2ecc71; }
+        #btn-all:hover { background: #9b59b6; border-color: #9b59b6; }
 
         #hpoi-logger {
             position: fixed;
@@ -83,7 +90,7 @@
             gap: 5px;
             pointer-events: none;
         }
-
+        
         .log-item {
             pointer-events: auto;
             padding: 8px 12px;
@@ -102,14 +109,11 @@
         .log-item.success { border-left-color: #2ecc71; }
         .log-item.error { border-left-color: #e74c3c; }
         .log-item.info { border-left-color: #35CDFF; }
-
-        .log-item.fading {
-            opacity: 0;
-            transform: translateX(20px);
-        }
+        .log-item.fading { opacity: 0; transform: translateX(20px); }
 
         @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
+        /* 设置弹窗 */
         #hpoi-settings-modal {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -122,28 +126,32 @@
         }
         .settings-card {
             background: #fff;
-            width: 420px;
-            padding: 30px;
+            width: 450px;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 25px;
             border-radius: 12px;
             box-shadow: 0 25px 50px rgba(0,0,0,0.3);
         }
-        .settings-card h3 { margin: 0 0 20px 0; color: #333; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 8px; font-weight: bold; color: #555; font-size: 13px; }
+        .settings-card h3 { margin: 10px 0 15px 0; color: #333; font-size: 16px; border-bottom: 2px solid var(--primary-color); padding-bottom: 5px; display: inline-block; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; font-size: 12px; }
         .form-group input {
             width: 100%;
-            padding: 10px;
+            padding: 8px;
             border: 1px solid #ddd;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 13px;
             outline: none;
+            background: var(--input-bg);
         }
-        .form-group input:focus { border-color: var(--primary-color); }
-        .btn-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 25px; }
-        .btn { padding: 8px 20px; border-radius: 6px; cursor: pointer; border: none; font-weight: bold; font-size: 13px; }
-        .btn-test { background: #f39c12; color: #fff; margin-right: auto; }
+        .form-group input:focus { border-color: var(--primary-color); background: #fff; }
+        .btn-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px; }
+        .btn { padding: 6px 16px; border-radius: 6px; cursor: pointer; border: none; font-weight: bold; font-size: 12px; }
+        .btn-test { background: #f39c12; color: #fff; }
         .btn-save { background: var(--primary-color); color: #fff; }
         .btn-cancel { background: #eee; color: #333; }
+        .section-gap { margin-top: 20px; }
     `;
 
     GM_addStyle(STYLES);
@@ -157,7 +165,9 @@
             controls.id = 'hpoi-md-controls';
             controls.innerHTML = `
                 <button class="hpoi-btn-pill" id="btn-settings"><i>⚙️</i> 设置</button>
-                <button class="hpoi-btn-pill" id="btn-generate"><i>⬇️</i> 生成 Markdown</button>
+                <button class="hpoi-btn-pill" id="btn-gen"><i>🖼️</i> 仅生成 MD</button>
+                <button class="hpoi-btn-pill" id="btn-pub"><i>🌐</i> 仅发布 Wiki</button>
+                <button class="hpoi-btn-pill" id="btn-all"><i>🚀</i> 生成 & 发布</button>
             `;
             document.body.appendChild(controls);
 
@@ -173,16 +183,38 @@
                     <div class="form-group">
                         <label>图床地址 (URL)</label>
                         <input type="text" id="conf-url" placeholder="例如: https://img.paccu.cn" value="${CONFIG.piscurUrl}">
-                        <small style="color:#999; display:block; margin-top:5px;">请输入完整域名，脚本会自动拼接 /api/image/upload</small>
                     </div>
                     <div class="form-group">
                         <label>API Key</label>
-                        <input type="password" id="conf-key" placeholder="在此输入 API Key" value="${CONFIG.apiKey}">
+                        <input type="password" id="conf-key" placeholder="Picsur API Key" value="${CONFIG.apiKey}">
                     </div>
+                    <div class="btn-row" style="border:none; padding:0; justify-content:flex-start;">
+                        <button class="btn btn-test" id="btn-test-piscur">⚡ 测试图床</button>
+                    </div>
+
+                    <div class="section-gap"></div>
+                    <h3>Wiki.js 配置</h3>
+                    <div class="form-group">
+                        <label>Wiki 地址 (URL)</label>
+                        <input type="text" id="conf-wiki-url" placeholder="例如: https://wiki.yoursite.com" value="${CONFIG.wikiUrl}">
+                        <small style="color:#999;">无需 /graphql 后缀，脚本会自动拼接</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Token (Bearer)</label>
+                        <input type="password" id="conf-wiki-token" placeholder="Wiki.js API Token" value="${CONFIG.wikiToken}">
+                    </div>
+                    <div class="form-group">
+                        <label>发布路径前缀</label>
+                        <input type="text" id="conf-wiki-path" placeholder="例如: hobby" value="${CONFIG.wikiPath}">
+                        <small style="color:#999;">最终路径: 前缀/手办ID (如 hobby/117891)</small>
+                    </div>
+                    <div class="btn-row" style="border:none; padding:0; justify-content:flex-start;">
+                         <button class="btn btn-test" id="btn-test-wiki">⚡ 测试 Wiki</button>
+                    </div>
+
                     <div class="btn-row">
-                        <button class="btn btn-test" id="btn-test-conn">⚡ 测试连接</button>
                         <button class="btn btn-cancel" id="btn-cancel">取消</button>
-                        <button class="btn btn-save" id="btn-save">保存配置</button>
+                        <button class="btn btn-save" id="btn-save">保存全部配置</button>
                     </div>
                 </div>
             `;
@@ -190,45 +222,59 @@
 
             document.getElementById('btn-settings').onclick = () => { modal.style.display = 'flex'; };
             document.getElementById('btn-cancel').onclick = () => { modal.style.display = 'none'; };
-            document.getElementById('btn-generate').onclick = Core.start;
+            
+            document.getElementById('btn-gen').onclick = () => Core.start('gen');
+            document.getElementById('btn-pub').onclick = () => Core.start('pub');
+            document.getElementById('btn-all').onclick = () => Core.start('all');
 
             document.getElementById('btn-save').onclick = () => {
-                let url = document.getElementById('conf-url').value.trim();
-                if (url.endsWith('/')) url = url.slice(0, -1);
-                const key = document.getElementById('conf-key').value.trim();
+                let pUrl = document.getElementById('conf-url').value.trim();
+                if (pUrl.endsWith('/')) pUrl = pUrl.slice(0, -1);
+                const pKey = document.getElementById('conf-key').value.trim();
 
-                GM_setValue('piscur_url', url);
-                GM_setValue('api_key', key);
-                CONFIG.piscurUrl = url;
-                CONFIG.apiKey = key;
+                let wUrl = document.getElementById('conf-wiki-url').value.trim();
+                if (wUrl.endsWith('/')) wUrl = wUrl.slice(0, -1);
+                const wToken = document.getElementById('conf-wiki-token').value.trim();
+                const wPath = document.getElementById('conf-wiki-path').value.trim();
+
+                GM_setValue('piscur_url', pUrl);
+                GM_setValue('api_key', pKey);
+                GM_setValue('wiki_url', wUrl);
+                GM_setValue('wiki_token', wToken);
+                GM_setValue('wiki_path', wPath);
+
+                Object.assign(CONFIG, { piscurUrl: pUrl, apiKey: pKey, wikiUrl: wUrl, wikiToken: wToken, wikiPath: wPath });
                 UI.log('配置已保存', 'success');
                 setTimeout(() => modal.style.display = 'none', 500);
             };
 
-            document.getElementById('btn-test-conn').onclick = async () => {
-                const btn = document.getElementById('btn-test-conn');
-                const origText = btn.textContent;
-                btn.textContent = '连接中...';
-                btn.disabled = true;
-
-                let url = document.getElementById('conf-url').value.trim();
-                if (url.endsWith('/')) url = url.slice(0, -1);
-                const key = document.getElementById('conf-key').value.trim();
-
+            document.getElementById('btn-test-piscur').onclick = async () => {
+                const btn = document.getElementById('btn-test-piscur');
+                const orig = btn.textContent;
+                btn.textContent = '连接中...'; btn.disabled = true;
                 const pixel = atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
                 const array = new Uint8Array(pixel.length);
-                for (let i = 0; i < pixel.length; i++) array[i] = pixel.charCodeAt(i);
                 const blob = new Blob([array], {type: 'image/gif'});
-
                 try {
-                    const resultUrl = await Core.uploadToPiscurDirect(blob, 'test_pixel.gif', url, key);
-                    UI.log(`连接成功！测试图: ${resultUrl}`, 'success');
-                } catch (e) {
-                    UI.log(`连接测试失败: ${e}`, 'error');
-                } finally {
-                    btn.textContent = origText;
-                    btn.disabled = false;
-                }
+                    const url = document.getElementById('conf-url').value.trim().replace(/\/$/, '');
+                    const key = document.getElementById('conf-key').value.trim();
+                    const res = await Core.uploadToPiscurDirect(blob, 'test.gif', url, key);
+                    UI.log(`图床正常: ${res}`, 'success');
+                } catch (e) { UI.log(`图床错误: ${e}`, 'error'); } 
+                finally { btn.textContent = orig; btn.disabled = false; }
+            };
+
+            document.getElementById('btn-test-wiki').onclick = async () => {
+                const btn = document.getElementById('btn-test-wiki');
+                const orig = btn.textContent;
+                btn.textContent = '连接中...'; btn.disabled = true;
+                try {
+                    const url = document.getElementById('conf-wiki-url').value.trim().replace(/\/$/, '');
+                    const token = document.getElementById('conf-wiki-token').value.trim();
+                    await Core.testWikiConnection(url, token);
+                    UI.log(`Wiki 连接成功！Token 有效。`, 'success');
+                } catch (e) { UI.log(`Wiki 错误: ${e}`, 'error'); }
+                finally { btn.textContent = orig; btn.disabled = false; }
             };
         },
 
@@ -238,16 +284,12 @@
             div.className = `log-item ${type}`;
             div.textContent = msg;
             box.appendChild(div);
-
             let timer = null;
-            const removeLog = () => {
-                div.classList.add('fading');
-                setTimeout(() => { if(div.parentNode) div.remove(); }, 500);
-            };
-            const startTimer = () => { timer = setTimeout(removeLog, 10000); };
+            const remove = () => { div.classList.add('fading'); setTimeout(() => { if(div.parentNode) div.remove(); }, 500); };
+            const start = () => { timer = setTimeout(remove, 8000); };
             div.addEventListener('mouseenter', () => { if (timer) clearTimeout(timer); div.classList.remove('fading'); });
-            div.addEventListener('mouseleave', () => { startTimer(); });
-            startTimer();
+            div.addEventListener('mouseleave', () => start());
+            start();
         }
     };
 
@@ -255,56 +297,60 @@
     // 3. 核心逻辑
     // ============================================
     const Core = {
-        start: async () => {
+        start: async (mode = 'all') => {
             if (!CONFIG.piscurUrl || !CONFIG.apiKey) {
-                UI.log('请先点击“设置”配置图床信息！', 'error');
-                return;
+                UI.log('请先配置图床信息！', 'error'); return;
             }
 
-            UI.log('正在解析页面数据...', 'info');
-
+            UI.log(`开始任务 (模式: ${mode === 'gen' ? '仅生成' : mode === 'pub' ? '仅发布' : '生成&发布'})`, 'info');
+            
             try {
-                // 1. 获取数据 (包含Icon提取逻辑)
                 const { info: data, images: imagesToProcess } = Core.extractData();
-                UI.log(`已识别手办：${data.name}`, 'info');
+                UI.log(`已识别: ${data.name}`, 'info');
 
-                if (imagesToProcess.length === 0) {
-                     UI.log('注意：未检测到任何图片', 'info');
-                } else {
-                     UI.log(`共 ${imagesToProcess.length} 张图片(含图标)，开始上传...`, 'info');
-                }
-
-                // 2. 批量上传 (强制单线程)
                 const uploadedImages = [];
-                const batchSize = 1;
-
-                for (let i = 0; i < imagesToProcess.length; i += batchSize) {
-                    const batch = imagesToProcess.slice(i, i + batchSize);
-                    const results = await Promise.all(batch.map(img => Core.processImage(img)));
-                    uploadedImages.push(...results);
-                    UI.log(`上传进度: ${Math.min(i + batchSize, imagesToProcess.length)} / ${imagesToProcess.length}`, 'info');
+                for (let i = 0; i < imagesToProcess.length; i++) {
+                    const img = imagesToProcess[i];
+                    uploadedImages.push(await Core.processImage(img));
+                    UI.log(`图床上传: ${i + 1}/${imagesToProcess.length}`, 'info');
                 }
 
-                // 3. 生成 Markdown
                 const markdown = Core.buildMarkdown(data, uploadedImages);
-                GM_setClipboard(markdown);
-                UI.log('Markdown 生成成功！已写入剪贴板。', 'success');
+
+                if (mode === 'gen' || mode === 'all') {
+                    GM_setClipboard(markdown);
+                    UI.log('Markdown 已复制到剪贴板！', 'success');
+                } else if (mode === 'pub') {
+                     console.log("Markdown Content:", markdown);
+                }
+
+                if (mode === 'pub' || mode === 'all') {
+                    if (CONFIG.wikiUrl && CONFIG.wikiToken) {
+                        UI.log('正在发布到 Wiki.js ...', 'info');
+                        await Core.publishToWiki(data, markdown);
+                        UI.log('Wiki 发布成功！', 'success');
+                    } else {
+                        UI.log('Wiki 配置为空，无法发布。', 'error');
+                    }
+                }
 
             } catch (e) {
                 console.error(e);
-                UI.log(`流程异常: ${e.message}`, 'error');
+                UI.log(`错误: ${e.message}`, 'error');
             }
         },
 
         extractData: () => {
             const info = {};
             const imagesToProcess = [];
+            
+            info.url = window.location.href; 
+            const urlParts = info.url.split('/');
+            info.id = urlParts[urlParts.length - 1].split('?')[0] || 'unknown';
 
-            // 标题
             const titleEl = document.querySelector('.hpoi-ibox-title p');
             info.name = titleEl ? titleEl.textContent.replace('中文名称：', '').trim() : 'Unknown';
 
-            // 信息列表
             document.querySelectorAll('.hpoi-infoList-item').forEach(item => {
                 const labelSpan = item.querySelector('span');
                 const p = item.querySelector('p');
@@ -312,68 +358,35 @@
                     const label = labelSpan.textContent.trim();
                     let value = '';
 
-                    // === 1. 属性 (修复双逗号) ===
                     if (label === '属性') {
-                        // 只提取 A 标签内的文本，忽略 P 标签内的逗号文本节点
-                        const attrs = Array.from(p.querySelectorAll('a'))
-                                           .map(a => a.textContent.trim())
-                                           .filter(t => t);
-                        if (attrs.length > 0) {
-                            value = attrs.join('、');
-                        } else {
-                            // 兜底：如果没有链接，则暴力清理
-                            value = p.textContent.replace(/\s+/g, ' ').replace(/、+/g, '、').trim();
-                        }
+                        const attrs = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
+                        value = attrs.length > 0 ? attrs.join('、') : p.textContent.replace(/\s+/g, ' ').trim();
                     }
-                    // === 2. 外部链接 (提取 Icon) ===
                     else if (label === '外部链接' || label === '官网链接') {
                         const links = p.querySelectorAll('a');
-                        const linkData = []; // 暂存结构化数据，生成时再拼接
-
+                        const linkData = [];
                         links.forEach(aTag => {
                             let rawUrl = aTag.href;
-                            // 解码 Hpoi 跳转链接
                             if (rawUrl.includes('hprdrt?url=')) {
-                                try {
-                                    const params = new URLSearchParams(rawUrl.split('?')[1]);
-                                    rawUrl = decodeURIComponent(params.get('url')) || rawUrl;
-                                } catch (e) { }
+                                try { rawUrl = decodeURIComponent(new URLSearchParams(rawUrl.split('?')[1]).get('url')) || rawUrl; } catch (e) {}
                             }
-
                             const imgTag = aTag.querySelector('img');
                             if (imgTag) {
-                                // 发现图标：加入上传队列
                                 imagesToProcess.push({ type: 'icon', url: imgTag.src });
-                                linkData.push({
-                                    type: 'icon',
-                                    src: imgTag.src, // 原始地址作为 Key
-                                    href: rawUrl
-                                });
+                                linkData.push({ type: 'icon', src: imgTag.src, href: rawUrl });
                             } else {
-                                const text = aTag.textContent.trim() || '链接';
-                                linkData.push({
-                                    type: 'text',
-                                    text: text,
-                                    href: rawUrl
-                                });
+                                linkData.push({ type: 'text', text: aTag.textContent.trim() || '链接', href: rawUrl });
                             }
                         });
-                        value = linkData; // 存为对象数组，buildMarkdown 时处理
+                        value = linkData;
                     }
-                    // === 3. 普通文本 ===
                     else {
-                        value = Array.from(p.childNodes)
-                            .map(n => n.textContent.trim())
-                            .filter(t => t)
-                            .join('、')
-                            .replace(/、、/g, '、');
+                        value = Array.from(p.childNodes).map(n => n.textContent.trim()).filter(t => t).join('、').replace(/、、/g, '、');
                     }
-
                     if (value) info[label] = value;
                 }
             });
 
-            // 封面图
             const coverEl = document.querySelector('.hpoi-ibox-img img');
             if (coverEl) {
                 const src = coverEl.src.split('?')[0];
@@ -381,48 +394,37 @@
                 imagesToProcess.push({ type: 'cover', url: src });
             }
 
-            // 官图
             info.gallery = [];
             document.querySelectorAll('.swiper-gallery .swiper-slide img').forEach(img => {
                 let src = img.src || img.getAttribute('data-src');
                 if (src) {
-                    src = src.split('?')[0];
-                    if (src.includes('/pic/s/')) src = src.replace('/pic/s/', '/pic/n/');
-                    info.gallery.push(src); // 存入信息以便预览（可选）
+                    src = src.split('?')[0].replace('/pic/s/', '/pic/n/');
+                    info.gallery.push(src);
                     imagesToProcess.push({ type: 'gallery', url: src });
                 }
             });
+
+            // [新增] 拼接厂商名到标题
+            if (info['制作']) {
+                info.name = `${info['制作']} ${info.name}`;
+            }
 
             return { info, images: imagesToProcess };
         },
 
         processImage: async (imgObj) => {
             try {
-                // 下载 Blob (含防盗链处理)
                 const blob = await Core.fetchBlob(imgObj.url);
-
-                // 类型检查
                 let ext = 'jpg';
-                if (blob.type === 'image/jpeg') ext = 'jpg';
-                else if (blob.type === 'image/png') ext = 'png';
-                else if (blob.type === 'image/webp') ext = 'webp';
+                if (blob.type === 'image/png') ext = 'png';
                 else if (blob.type === 'image/gif') ext = 'gif';
-                else {
-                    const urlExt = imgObj.url.split('.').pop().toLowerCase();
-                    if (['jpg','jpeg','png','webp','gif'].includes(urlExt)) {
-                        ext = urlExt === 'jpeg' ? 'jpg' : urlExt;
-                    }
-                }
-
-                // Icon 可能很小，文件名加个标识
+                else if (blob.type === 'image/webp') ext = 'webp';
+                
                 const prefix = imgObj.type === 'icon' ? 'icon_' : 'hpoi_';
                 const filename = `${prefix}${Date.now()}_${Math.random().toString(36).substr(2, 5)}.${ext}`;
-
                 const uploadedUrl = await Core.uploadToPiscurDirect(blob, filename, CONFIG.piscurUrl, CONFIG.apiKey);
-
                 return { original: imgObj.url, newUrl: uploadedUrl, type: imgObj.type };
             } catch (e) {
-                UI.log(`上传失败 [${imgObj.type}]: ${e}`, 'error');
                 return { original: imgObj.url, newUrl: imgObj.url, type: imgObj.type, error: true };
             }
         },
@@ -434,20 +436,11 @@
                     url: url,
                     headers: { "Referer": "https://www.hpoi.net/" },
                     responseType: "blob",
-                    onload: (response) => {
-                        if (response.status === 200) {
-                             // 简单校验
-                             const type = response.response.type;
-                             if (type && (type.startsWith('image/') || type === 'application/octet-stream')) {
-                                 resolve(response.response);
-                             } else {
-                                 reject(`非图片内容 (${type})`);
-                             }
-                        } else {
-                            reject(`HTTP ${response.status}`);
-                        }
+                    onload: (res) => {
+                        if (res.status === 200) resolve(res.response);
+                        else reject(`HTTP ${res.status}`);
                     },
-                    onerror: (err) => reject('网络请求失败')
+                    onerror: () => reject('网络错误')
                 });
             });
         },
@@ -456,107 +449,150 @@
             return new Promise((resolve, reject) => {
                 const formData = new FormData();
                 formData.append('image', blob, filename);
-
                 GM_xmlhttpRequest({
                     method: "POST",
                     url: `${host}/api/image/upload`,
-                    headers: {
-                        "Authorization": `Api-Key ${key}`,
-                        "Accept": "application/json"
-                    },
+                    headers: { "Authorization": `Api-Key ${key}`, "Accept": "application/json" },
                     data: formData,
-                    onload: (response) => {
+                    onload: (res) => {
                         try {
-                            const json = JSON.parse(response.responseText);
-                            if (json.success === true || json.status === true) {
-                                let finalUrl = "";
-
-                                // 提取 URL 或 ID
-                                if (json.data && json.data.url) {
-                                    finalUrl = json.data.url;
-                                } else if (json.data && json.data.id) {
-                                    // ID 模式
-                                    finalUrl = `${host}/i/${json.data.id}.jpg`; // 默认占位，下面会强转
-                                } else if (json.data && json.data.links && json.data.links.url) {
-                                    finalUrl = json.data.links.url;
-                                }
-
-                                // === 强制替换后缀为 .webp ===
-                                if (finalUrl) {
-                                    // 无论原后缀是什么，都替换为 .webp
-                                    finalUrl = finalUrl.replace(/\.[^.]+$/, '.webp');
-                                    resolve(finalUrl);
-                                    return;
-                                }
+                            const json = JSON.parse(res.responseText);
+                            if (json.success || json.status) {
+                                let url = json.data?.url || (json.data?.id ? `${host}/i/${json.data.id}.jpg` : json.data?.links?.url);
+                                if (url) { resolve(url.replace(/\.[^.]+$/, '.webp')); return; }
                             }
-                            const errorMsg = (json.data && json.data.message) || json.message || '未知错误';
-                            reject(`API 错误: ${errorMsg}`);
-                        } catch (e) {
-                            reject('JSON 解析错误');
-                        }
+                            reject(json.message || 'API Error');
+                        } catch { reject('JSON Error'); }
                     },
-                    onerror: (err) => reject('网络层错误')
+                    onerror: () => reject('Net Error')
                 });
             });
         },
 
         buildMarkdown: (data, uploadedImages) => {
-            // 辅助函数：根据原始 URL 查找上传后的 URL
-            const getUrl = (originalUrl) => {
-                const img = uploadedImages.find(i => i.original === originalUrl);
-                return (img && !img.error) ? img.newUrl : originalUrl;
+            const getUrl = (orig) => {
+                const img = uploadedImages.find(i => i.original === orig);
+                return (img && !img.error) ? img.newUrl : orig;
             };
 
             const cover = uploadedImages.find(i => i.type === 'cover');
-
+            
             let md = `## ${data.name}\n\n`;
-
-            if (cover && !cover.error) {
-                md += `![封面](${cover.newUrl})\n\n`;
-            } else if (data.coverImg) {
-                md += `![封面](${data.coverImg})\n\n`;
-            }
+            
+            if (cover && !cover.error) md += `![封面](${cover.newUrl})\n\n`;
+            else if (data.coverImg) md += `![封面](${data.coverImg})\n\n`;
 
             md += `| 项目 | 内容 |\n| :--- | :--- |\n`;
-
-            const specificKeys = ['名称', '属性', '定价', '出货日', '比例', '制作', '系列', '角色', '作品', '官网链接', '外部链接'];
-            specificKeys.forEach(key => {
+            
+            const keys = ['名称', '属性', '定价', '出货日', '比例', '制作', '系列', '角色', '作品', '官网链接', '外部链接'];
+            keys.forEach(key => {
                 if (data[key]) {
                     let val = data[key];
-
-                    // 特殊处理链接数组
                     if (Array.isArray(val)) {
                         val = val.map(item => {
                             if (item.type === 'icon') {
                                 const newSrc = getUrl(item.src);
-                                // HTML img 标签限制高度为 12px
                                 return `<a href="${item.href}" target="_blank"><img src="${newSrc}" height="12px"/></a>`;
-                            } else {
-                                return `[${item.text}](${item.href})`;
-                            }
+                            } else return `[${item.text}](${item.href})`;
                         }).join(' ');
                     }
-
                     md += `| ${key} | ${val} |\n`;
                 }
             });
 
             for (let [k, v] of Object.entries(data)) {
-                if (!specificKeys.includes(k) && k !== 'name' && k !== 'coverImg' && k !== 'gallery') {
-                    if (typeof v === 'string') md += `| ${k} | ${v} |\n`;
+                if (!keys.includes(k) && !['name','coverImg','gallery','url','id'].includes(k) && typeof v === 'string') {
+                    md += `| ${k} | ${v} |\n`;
                 }
             }
+            
+            md += `\n[${data.url}](${data.url})\n\n`;
 
-            md += `\n### 官方图片\n\n`;
-            const gallery = uploadedImages.filter(i => i.type === 'gallery');
-            if (gallery.length > 0) {
-                gallery.forEach(img => {
-                    md += `![官图](${img.newUrl || img.original})\n`;
-                });
-            } else {
-                md += `> (未检测到官方图片)\n`;
-            }
+            md += `### 官方图片\n\n`;
+            uploadedImages.filter(i => i.type === 'gallery').forEach(img => {
+                md += `![官图](${img.newUrl || img.original})\n`;
+            });
             return md;
+        },
+
+        testWikiConnection: (url, token) => {
+            return new Promise((resolve, reject) => {
+                const query = `query { pages { list(limit: 1) { id title } } }`;
+                GM_xmlhttpRequest({
+                    method: "POST",
+                    url: `${url}/graphql`,
+                    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+                    data: JSON.stringify({ query }),
+                    onload: (res) => {
+                        if (res.status === 200) {
+                            const json = JSON.parse(res.responseText);
+                            if (json.errors) reject(json.errors[0].message);
+                            else resolve(true);
+                        }
+                        else reject(`HTTP ${res.status}: ${res.responseText}`);
+                    },
+                    onerror: () => reject('Wiki 连接网络错误')
+                });
+            });
+        },
+
+        publishToWiki: (data, content) => {
+            return new Promise((resolve, reject) => {
+                const tags = ['手办']; 
+                if (data['制作']) tags.push(data['制作']);
+                if (data['作品']) tags.push(data['作品']);
+                if (data['角色']) tags.push(data['角色']);
+                const cleanTags = [...new Set(tags)].map(t => t.replace(/[、,，\s]/g, '')).filter(t => t);
+
+                const path = `${CONFIG.wikiPath}/${data.id}`;
+
+                const mutation = `
+                    mutation ($content: String!, $description: String!, $editor: String!, $isPrivate: Boolean!, $isPublished: Boolean!, $locale: String!, $path: String!, $tags: [String]!, $title: String!) {
+                        pages {
+                            create (content: $content, description: $description, editor: $editor, isPrivate: $isPrivate, isPublished: $isPublished, locale: $locale, path: $path, tags: $tags, title: $title) {
+                                responseResult {
+                                    succeeded
+                                    errorCode
+                                    message
+                                }
+                            }
+                        }
+                    }
+                `;
+
+                const variables = {
+                    content: content,
+                    description: `Hpoi ID: ${data.id} - ${data.name}`,
+                    editor: "markdown",
+                    isPrivate: false,
+                    isPublished: true,
+                    locale: "zh",
+                    path: path,
+                    tags: cleanTags,
+                    title: data.name
+                };
+
+                GM_xmlhttpRequest({
+                    method: "POST",
+                    url: `${CONFIG.wikiUrl}/graphql`,
+                    headers: { "Authorization": `Bearer ${CONFIG.wikiToken}`, "Content-Type": "application/json" },
+                    data: JSON.stringify({ query: mutation, variables }),
+                    onload: (res) => {
+                        try {
+                            const json = JSON.parse(res.responseText);
+                            if (json.errors) {
+                                reject('Wiki API Error: ' + json.errors[0].message);
+                            } else if (json.data && json.data.pages && json.data.pages.create.responseResult.succeeded) {
+                                resolve(true);
+                            } else {
+                                const msg = json.data?.pages?.create?.responseResult?.message || '未知错误 (可能是页面已存在)';
+                                reject('发布失败: ' + msg);
+                            }
+                        } catch (e) { reject('Wiki Response Parse Error'); }
+                    },
+                    onerror: () => reject('Wiki Publish Network Error')
+                });
+            });
         }
     };
 
