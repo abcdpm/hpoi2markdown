@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hpoi to Markdown with Picsur & Wiki.js (v3.7 Publish Fix)
+// @name         Hpoi to Markdown with Picsur & Wiki.js (v4.0 Split Tags)
 // @namespace    http://tampermonkey.net/
-// @version      3.7
-// @description  提取 Hpoi 手办信息上传图床，自动拼接厂商名，修复覆盖更新后的发布状态。
+// @version      4.0
+// @description  提取 Hpoi 手办信息上传图床，自动拆分多厂商/角色标签，优化表格分隔符，支持覆盖更新。
 // @author       Gemini User
 // @match        https://www.hpoi.net/hobby/*
 // @grant        GM_xmlhttpRequest
@@ -358,9 +358,26 @@
                     const label = labelSpan.textContent.trim();
                     let value = '';
 
-                    if (label === '属性') {
-                        const attrs = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
-                        value = attrs.length > 0 ? attrs.join('、') : p.textContent.replace(/\s+/g, ' ').trim();
+                    // 需要列表处理的字段
+                    const listFields = ['制作', '发行', '原画', '角色', '作品', '属性'];
+
+                    if (listFields.includes(label)) {
+                        // 1. 尝试抓取所有链接文本
+                        let items = Array.from(p.querySelectorAll('a')).map(a => a.textContent.trim()).filter(t => t);
+
+                        // 2. 如果没有链接，尝试纯文本分割
+                        if (items.length === 0) {
+                            // 替换常见分隔符为统一的分隔符，然后分割
+                            items = p.textContent.replace(/[、,，&/]+/g, ' ').split(/\s+/).filter(t => t);
+                        }
+
+                        // 3. 表格内容统一用顿号连接
+                        value = items.join('、');
+
+                        // [特殊] 制作厂商：标题前缀需要用空格连接
+                        if (label === '制作') {
+                            info._titlePrefix = items.join(' ');
+                        }
                     }
                     else if (label === '外部链接' || label === '官网链接') {
                         const links = p.querySelectorAll('a');
@@ -404,7 +421,10 @@
                 }
             });
 
-            if (info['制作']) info.name = `${info['制作']} ${info.name}`;
+            // 拼接标题：使用空格连接的厂商名
+            if (info._titlePrefix) {
+                info.name = `${info._titlePrefix} ${info.name}`;
+            }
 
             return { info, images: imagesToProcess };
         },
@@ -481,7 +501,7 @@
 
             md += `| 项目 | 内容 |\n| :--- | :--- |\n`;
 
-            const keys = ['名称', '属性', '定价', '出货日', '比例', '制作', '系列', '角色', '作品', '官网链接', '外部链接'];
+            const keys = ['名称', '属性', '定价', '出货日', '比例', '制作', '发行', '原画', '系列', '角色', '作品', '官网链接', '外部链接'];
             keys.forEach(key => {
                 if (data[key]) {
                     let val = data[key];
@@ -498,7 +518,7 @@
             });
 
             for (let [k, v] of Object.entries(data)) {
-                if (!keys.includes(k) && !['name','coverImg','gallery','url','id'].includes(k) && typeof v === 'string') {
+                if (!keys.includes(k) && !['name','coverImg','gallery','url','id','_titlePrefix'].includes(k) && typeof v === 'string') {
                     md += `| ${k} | ${v} |\n`;
                 }
             }
@@ -536,10 +556,24 @@
         // === Wiki.js 发布/更新逻辑 ===
         publishToWiki: async (data, content) => {
             const tags = ['手办'];
-            if (data['制作']) tags.push(data['制作']);
-            if (data['作品']) tags.push(data['作品']);
-            if (data['角色']) tags.push(data['角色']);
-            const cleanTags = [...new Set(tags)].map(t => t.replace(/[、,，\s]/g, '')).filter(t => t);
+
+            // [FIX] 自动拆分多值的字段为独立 Tag
+            const splitAndAdd = (key) => {
+                if (data[key]) {
+                    // 使用 、 分割（extractData 中已标准化为、）
+                    data[key].split('、').forEach(item => {
+                        if(item.trim()) tags.push(item.trim());
+                    });
+                }
+            };
+
+            splitAndAdd('制作');
+            splitAndAdd('发行');
+            splitAndAdd('原画');
+            splitAndAdd('作品');
+            splitAndAdd('角色');
+
+            const cleanTags = [...new Set(tags)].filter(t => t); // 去重
 
             const path = `${CONFIG.wikiPath}/${data.id}`;
             const locale = "zh";
@@ -591,7 +625,6 @@
             const pageId = queryRes.data?.pages?.singleByPath?.id;
             if (!pageId) throw new Error("无法获取现有页面 ID，更新失败");
 
-            // [FIX] Update 时显式指定 isPublished: true 和 isPrivate: false
             const updateRes = await Core.gqlRequest(`
                 mutation ($id: Int!, $content: String!, $description: String!, $tags: [String]!, $title: String!, $isPublished: Boolean!, $isPrivate: Boolean!) {
                     pages {
@@ -625,7 +658,7 @@
                         try {
                             const json = JSON.parse(res.responseText);
                             if (json.errors && !JSON.stringify(json.errors).includes("exists")) {
-                                // 允许 exists 错误传递给外层逻辑
+                                // allow errors to bubble up
                             }
                             resolve(json);
                         } catch (e) { reject('Wiki JSON Error'); }
